@@ -125,11 +125,10 @@ Cada staging genera dos conjuntos de registros: `clean` (`inconsistency = FALSE`
 | 3 | payments | P102 | `loan_id = L013` pero `I040` pertenece a `L012` (cross-loan) | WARNING | `inconsistency = TRUE` — detectado por validación cruzada loan/cuota | No |
 | 4 | payments | P102 | `payment_channel = NULL` | INFO | Imputado a `'UNKNOWN'` vía `COALESCE` — no impide clean si pasa las demás reglas | No (bloqueado por anomalía 3) |
 | 5 | payments | P103 | `payment_status = REVERSED` | INFO | Pasa staging con `inconsistency = FALSE`; no hay regla de dominio en staging | Sí |
-| 6 | payments | P104 | Mismo `loan_id + installment_id` ya registrado en P041 | WARNING | Deduplicado — `QUALIFY ROW_NUMBER()` retiene primera ocurrencia (P041) | No |
-| 7 | payments | P105 | `payment_status = PENDING` | INFO | Pasa staging con `inconsistency = FALSE` | Sí |
-| 8 | payments | P106 | `payment_amount = 0` | WARNING | `inconsistency = TRUE` | No |
-| 9 | payments | P107 | Referencia a I135 (cuota fantasma, `installment_number = 99`) | WARNING | `inconsistency = TRUE` — I135 no existe en staging clean | No |
-| 10 | loans | L017, L043 | `loan_status = DEFAULT` | INFO | Incluidos — `DEFAULT` está en el dominio permitido | Sí |
+| 6 | payments | P105 | `payment_status = PENDING` | INFO | Pasa staging con `inconsistency = FALSE` | Sí |
+| 7 | payments | P106 | `payment_amount = 0` | WARNING | `inconsistency = TRUE` | No |
+| 8 | payments | P107 | Referencia a I135 (cuota fantasma, `installment_number = 99`) | WARNING | `inconsistency = TRUE` — I135 no existe en staging clean | No |
+| 9 | loans | L017, L043 | `loan_status = DEFAULT` | INFO | Incluidos — `DEFAULT` está en el dominio permitido | Sí |
 
 ---
 
