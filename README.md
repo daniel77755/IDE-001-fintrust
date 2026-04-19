@@ -51,6 +51,12 @@ Para abrir la base de datos del proyecto:
 duckdb fintrust.duckdb
 ```
 
+También puedes lanzar la interfaz web integrada de DuckDB para explorar los datos visualmente:
+```bash
+duckdb -ui
+```
+Esto abre automáticamente un navegador con una UI donde puedes navegar esquemas, tablas y ejecutar consultas SQL sobre `fintrust.duckdb`.
+
 ### 3. API Key de Google Gemini (solo para el agente)
 
 1. Ingresa a `https://aistudio.google.com/app/apikey`
