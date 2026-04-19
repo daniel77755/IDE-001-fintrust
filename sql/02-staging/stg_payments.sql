@@ -2,7 +2,8 @@
 -- STAGING: stg_payments
 -- Fuente: raw_fintrust.payments
 -- Limpieza: excluye pagos con payment_id nulo, payment_amount = 0, channel vacío,
---           o loan_id/installment_id sin match en sus tablas padre.
+--           loan_id/installment_id sin match en sus tablas padre,
+--           o loan_id inconsistente con el loan_id registrado en la cuota (cross-loan).
 --           Imputa payment_channel y payment_status nulos como 'UNKNOWN'.
 --           Deduplica por payment_id (QUALIFY ROW_NUMBER).
 -- Flag: inconsistency = TRUE conserva registros con incumplimientos para auditoría.
@@ -27,6 +28,10 @@ WITH base_payments_clean AS (
     AND NULLIF(payment_id, '') IN (SELECT DISTINCT NULLIF(payment_id, '') FROM raw_fintrust.payments)
     AND NULLIF(loan_id, '') IN (SELECT DISTINCT NULLIF(loan_id, '') FROM raw_fintrust.loans)
     AND NULLIF(installment_id, '') IN (SELECT DISTINCT NULLIF(installment_id, '') FROM raw_fintrust.installments)
+    AND NULLIF(loan_id, '') = (
+        SELECT loan_id FROM raw_fintrust.installments
+        WHERE installment_id = NULLIF(payments.installment_id, '')
+    )
 ),
 base_payments_audit AS (
     SELECT
@@ -45,6 +50,10 @@ base_payments_audit AS (
     OR NULLIF(payment_id, '') NOT IN (SELECT DISTINCT NULLIF(payment_id, '') FROM raw_fintrust.payments)
     OR NULLIF(loan_id, '') NOT IN (SELECT DISTINCT NULLIF(loan_id, '') FROM raw_fintrust.loans)
     OR NULLIF(installment_id, '') NOT IN (SELECT DISTINCT NULLIF(installment_id, '') FROM raw_fintrust.installments)
+    OR NULLIF(loan_id, '') != (
+        SELECT loan_id FROM raw_fintrust.installments
+        WHERE installment_id = NULLIF(payments.installment_id, '')
+    )
 )
 SELECT * FROM
 (SELECT * FROM base_payments_clean

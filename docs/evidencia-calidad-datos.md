@@ -107,9 +107,9 @@ Cada staging genera dos conjuntos de registros: `clean` (`inconsistency = FALSE`
 |---|---|---|
 | `payment_id` no nulo ni vacío | Filtro clean | `NULLIF(payment_id, '') IS NOT NULL` |
 | `payment_amount > 0` | Filtro clean | Excluye pagos de monto cero |
-| `payment_channel` no vacío | Filtro clean | `NULLIF(payment_channel, '') IS NOT NULL` |
 | `loan_id` existe en loans | Integridad referencial | Solo pagos con crédito válido en clean |
 | `installment_id` existe en installments | Integridad referencial | Solo pagos con cuota válida en clean |
+| `loan_id` coincide con el `loan_id` de la cuota | Integridad cruzada (cross-loan) | Subconsulta contra `raw_fintrust.installments`; detecta pagos asignados al crédito incorrecto |
 | `payment_channel` nulo → 'UNKNOWN' | Imputación | `COALESCE(UPPER(TRIM(NULLIF(payment_channel, ''))), 'UNKNOWN')` |
 | `payment_status` nulo → 'UNKNOWN' | Imputación | `COALESCE(UPPER(TRIM(NULLIF(payment_status, ''))), 'UNKNOWN')` |
 | Deduplicación por `payment_id` | Dedup | `QUALIFY ROW_NUMBER() OVER (PARTITION BY payment_id) = 1` |
@@ -118,29 +118,54 @@ Cada staging genera dos conjuntos de registros: `clean` (`inconsistency = FALSE`
 
 ## Anomalías conocidas en los datos fuente
 
-| ID | Tabla | Registro | Anomalía | Severidad | Acción en staging |
-|---|---|---|---|---|---|
-| 1 | installments | I135 | `installment_number = 99` (fuera de rango) | WARNING | `inconsistency = TRUE` — excluido de analytics |
-| 2 | payments | P101 | `installment_id = I999` no existe | WARNING | `inconsistency = TRUE` — excluido de analytics |
-| 3 | payments | P102 | `installment_id = I040` pertenece a L012, no a L013 | WARNING | `inconsistency = TRUE` — excluido de analytics |
-| 4 | payments | P102 | `payment_channel = NULL` | INFO | Reemplazado por `'UNKNOWN'` vía `COALESCE` |
-| 5 | payments | P103 | `payment_status = REVERSED` | INFO | Pasa staging pero `inconsistency = TRUE` si huérfano |
-| 6 | payments | P104 | Mismo loan+installment ya pagado en P041 | WARNING | Deduplicado — `QUALIFY` retiene primera ocurrencia |
-| 7 | payments | P105 | `payment_status = PENDING` | INFO | Pasa staging; excluido solo si huérfano |
-| 8 | payments | P106 | `payment_amount = 0` | WARNING | `inconsistency = TRUE` — excluido de analytics |
-| 9 | payments | P107 | Referencia a I135 (cuota fantasma) | WARNING | `inconsistency = TRUE` — excluido de analytics |
-| 10 | loans | L017, L043 | `loan_status = DEFAULT` | INFO | Incluidos — `DEFAULT` está en el dominio permitido |
+| ID | Tabla | Registro | Anomalía | Severidad | Acción en staging | Llega a analytics |
+|---|---|---|---|---|---|---|
+| 1 | installments | I135 | `installment_number = 99` (fuera de rango) | WARNING | `inconsistency = TRUE` | No |
+| 2 | payments | P101 | `installment_id = I999` no existe en installments | WARNING | `inconsistency = TRUE` | No |
+| 3 | payments | P102 | `loan_id = L013` pero `I040` pertenece a `L012` (cross-loan) | WARNING | `inconsistency = TRUE` — detectado por validación cruzada loan/cuota | No |
+| 4 | payments | P102 | `payment_channel = NULL` | INFO | Imputado a `'UNKNOWN'` vía `COALESCE` — no impide clean si pasa las demás reglas | No (bloqueado por anomalía 3) |
+| 5 | payments | P103 | `payment_status = REVERSED` | INFO | Pasa staging con `inconsistency = FALSE`; no hay regla de dominio en staging | Sí |
+| 6 | payments | P104 | Mismo `loan_id + installment_id` ya registrado en P041 | WARNING | Deduplicado — `QUALIFY ROW_NUMBER()` retiene primera ocurrencia (P041) | No |
+| 7 | payments | P105 | `payment_status = PENDING` | INFO | Pasa staging con `inconsistency = FALSE` | Sí |
+| 8 | payments | P106 | `payment_amount = 0` | WARNING | `inconsistency = TRUE` | No |
+| 9 | payments | P107 | Referencia a I135 (cuota fantasma, `installment_number = 99`) | WARNING | `inconsistency = TRUE` — I135 no existe en staging clean | No |
+| 10 | loans | L017, L043 | `loan_status = DEFAULT` | INFO | Incluidos — `DEFAULT` está en el dominio permitido | Sí |
 
 ---
 
 ## Impacto cuantitativo
 
-| Tabla | Total raw | Excluidos (inconsistency=TRUE) | Válidos en analytics |
+| Tabla | Total raw | Excluidos (`inconsistency = TRUE`) | Válidos en analytics |
 |---|---|---|---|
-| customers | — | Nulls en `customer_id` o `created_at` | Solo `inconsistency = FALSE` |
-| loans | — | `annual_rate/principal/term = 0`, `customer_id` huérfano | Solo `inconsistency = FALSE` |
+| customers | 35 | 0 | 35 |
+| loans | 45 | 0 | 45 |
 | installments | 135 | 1 (I135 — `installment_number = 99`) | 134 |
-| payments | 107 | P106 (monto 0), P101/P102/P107 (huérfanos), P104 (dedup) | ~100 |
+| payments | 107 | P101 (cuota inexistente), P102 (cross-loan), P104 (dedup), P106 (monto 0), P107 (cuota fantasma) | 102 |
+
+> P103 (`REVERSED`) y P105 (`PENDING`) pasan el filtro de staging y llegan a analytics con `inconsistency = FALSE`. Si se requiere excluirlos, debe agregarse una regla de dominio sobre `payment_status` en `stg_payments`.
+
+---
+
+## Qué llega a la capa analytics (`03-analytics/`)
+
+`dm_cartera` —y todas las vistas que la consumen— filtran explícitamente `inconsistency = FALSE` en las tres tablas de staging que unen:
+
+```sql
+WHERE i.inconsistency = FALSE   -- stg_installments
+  AND l.inconsistency = FALSE   -- stg_loans
+  AND c.inconsistency = FALSE   -- stg_customers
+-- stg_payments se filtra en el CTE pagos_por_cuota: WHERE inconsistency = FALSE
+```
+
+| Vista analytics | Fuente principal | Registros con inconsistency = TRUE excluidos |
+|---|---|---|
+| `dm_cartera` | `stg_installments` + `stg_loans` + `stg_customers` + `stg_payments` | Sí — filtro explícito en todas las capas |
+| `vw_daily_snapshot` | `dm_cartera` | Sí — hereda filtro de `dm_cartera` |
+| `vw_desembolsos_dia_ciudad_segmento` | `dm_cartera` | Sí |
+| `vw_saldo_segmento` | `dm_cartera` | Sí |
+| `vw_recaudo_mora` | `dm_cartera` | Sí |
+| `vw_cohort_deterioro` | `dm_cartera` | Sí |
+| `vw_top10_creditos_atraso` | `dm_cartera` | Sí |
 
 ---
 

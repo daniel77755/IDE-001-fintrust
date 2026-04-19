@@ -21,7 +21,7 @@ WITH base_installments_clean AS (
     FROM fintrust.raw_fintrust.installments
     WHERE principal_due > 0
     AND interest_due > 0
-    AND installment_number > 0
+    AND installment_number BETWEEN 1 AND 12
     AND NULLIF(installment_id, '') IS NOT NULL
     AND NULLIF(loan_id, '') IN (SELECT DISTINCT NULLIF(loan_id, '') FROM raw_fintrust.loans)
 ),
@@ -34,11 +34,11 @@ base_installments_audit AS (
         principal_due,
         interest_due,
         installment_status,
-        FALSE AS inconsistency 
+        TRUE AS inconsistency 
     FROM fintrust.raw_fintrust.installments
     WHERE principal_due = 0
     OR interest_due = 0
-    OR installment_number = 0
+    OR installment_number NOT BETWEEN 1 AND 12
     OR NULLIF(installment_id, '') IS NULL
     OR NULLIF(loan_id, '') NOT IN (SELECT DISTINCT NULLIF(loan_id, '') FROM raw_fintrust.loans)
 )
